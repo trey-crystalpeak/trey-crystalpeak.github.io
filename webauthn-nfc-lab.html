@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WebAuthn NFC Lab — automated</title>
+<style>
+  :root{
+    --bg:#0b0e11; --panel:#14181d; --panel2:#1a2027; --line:#232b33;
+    --tx:#d7dee4; --dim:#8ba0ae; --ok:#3fd68c; --bad:#f0564a; --warn:#e8b44c; --info:#5aa7e8;
+    --mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,system-ui,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font-family:var(--sans);
+       padding:12px 12px calc(24px + env(safe-area-inset-bottom));font-size:15px}
+  h1{font-family:var(--mono);font-size:16px;letter-spacing:.06em;margin:2px 0}
+  h1 .dot{color:var(--ok)}
+  #env{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all;margin:6px 0 12px;line-height:1.5}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .panel h2{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+            color:var(--dim);margin:0 0 10px}
+  button{appearance:none;border:1px solid var(--line);background:var(--panel2);color:var(--tx);
+         border-radius:8px;padding:11px 12px;font-size:14px;font-family:var(--sans);min-height:44px;
+         width:100%;margin:3px 0}
+  button:active{background:#222a33}
+  button.run{border-color:#2b7d54;background:#123122;color:#eafff4;font-size:16px;min-height:56px;font-weight:600}
+  button.sec{border-color:#2b5d8f;background:#16283a}
+  button.danger{border-color:#6e2b27;background:#2a1614}
+  button:disabled{opacity:.4}
+  .row{display:flex;gap:8px}.row>*{flex:1}
+  label{display:block;font-size:12px;color:var(--dim);margin:8px 0 3px}
+  select,input[type=number],input[type=text],textarea{width:100%;background:var(--panel2);color:var(--tx);
+    border:1px solid var(--line);border-radius:8px;padding:9px;font-size:14px;font-family:var(--mono)}
+  input,select{min-height:40px}
+  textarea{min-height:180px;line-height:1.4;font-size:11px;white-space:pre;overflow:auto}
+
+  /* progress hero */
+  #hero{background:linear-gradient(180deg,#0f141a,#0b0f13);border:1px solid var(--line);border-radius:10px;
+        padding:16px 12px;margin-bottom:12px;text-align:center}
+  #phaseName{font-family:var(--mono);font-size:13px;letter-spacing:.1em;color:var(--info);text-transform:uppercase}
+  #phaseSub{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:3px;min-height:14px}
+  #bar{height:6px;background:#0a0d10;border-radius:3px;overflow:hidden;margin:12px 0 6px;border:1px solid var(--line)}
+  #barFill{height:100%;width:0;background:linear-gradient(90deg,#2b7d54,#3fd68c);transition:width .3s}
+  #eta{font-family:var(--mono);font-size:10px;color:var(--dim);letter-spacing:.05em}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:10px 0 2px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 6px}
+  .stat .v{font-family:var(--mono);font-size:17px;line-height:1.2}
+  .stat .l{font-size:9px;color:var(--dim);letter-spacing:.04em;text-transform:uppercase}
+  .stat.ok .v{color:var(--ok)}.stat.bad .v{color:var(--bad)}.stat.info .v{color:var(--info)}
+
+  /* verdicts */
+  .vk{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px;align-items:baseline}
+  .vk .lbl{font-family:var(--mono);font-size:11px;color:var(--dim);white-space:nowrap}
+  .vk .val{font-family:var(--mono);font-size:12px}
+  .vk .val.ok{color:var(--ok)}.vk .val.bad{color:var(--bad)}.vk .val.warn{color:var(--warn)}.vk .val.dim{color:var(--dim)}
+
+  #log{font-family:var(--mono);font-size:11px;line-height:1.5;background:#07090b;border:1px solid var(--line);
+       border-radius:8px;padding:8px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+  .lg-ok{color:var(--ok)}.lg-bad{color:var(--bad)}.lg-warn{color:var(--warn)}.lg-info{color:var(--info)}.lg-dim{color:var(--dim)}
+  .note{font-size:12px;color:var(--dim);line-height:1.5;margin-top:8px}
+  .note b{color:var(--warn);font-weight:600}
+  details summary{font-family:var(--mono);font-size:12px;color:var(--dim);cursor:pointer;padding:4px 0}
+  .manualq{border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
+  .manualq:first-of-type{border-top:none;padding-top:0}
+  .manualq .q{font-size:13px;margin-bottom:4px}
+  .manualq .inf{font-family:var(--mono);font-size:11px;color:var(--info);margin-bottom:6px}
+  .seg{display:flex;gap:6px}
+  .seg button{margin:0;min-height:38px;font-size:13px}
+  .seg button.on{border-color:var(--ok);background:#123122;color:#eafff4}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+
+<h1>WEBAUTHN NFC LAB <span class="dot">●</span> <span style="color:var(--dim);font-size:11px">automated</span></h1>
+<div id="env">reading environment…</div>
+
+<!-- ── SETUP ── -->
+<div class="panel">
+  <h2>Setup</h2>
+  <label>Physical setup note (typed once — goes in the dump)</label>
+  <input type="text" id="setupNote" placeholder="e.g. iPhone 15 Pro, YubiKey 5 NFC taped to top-back edge">
+  <details>
+    <summary>Run parameters (defaults are fine)</summary>
+    <div class="row">
+      <div><label>soak cycles</label><input type="number" id="cfgCycles" value="20" min="1"></div>
+      <div><label>interval (s)</label><input type="number" id="cfgInterval" value="15" min="3"></div>
+    </div>
+    <div class="row">
+      <div><label>per-call cap (s)</label><input type="number" id="cfgCap" value="12" min="3"></div>
+      <div><label>rapid-fire max</label><input type="number" id="cfgRapid" value="15" min="2"></div>
+    </div>
+    <div class="row">
+      <div>
+        <label>userVerification</label>
+        <select id="cfgUV">
+          <option value="discouraged" selected>discouraged (polling baseline)</option>
+          <option value="preferred">preferred</option>
+          <option value="required">required (expect hands-off to fail)</option>
+        </select>
+      </div>
+      <div>
+        <label>residentKey (enroll)</label>
+        <select id="cfgRK">
+          <option value="discouraged" selected>discouraged</option>
+          <option value="required">required</option>
+        </select>
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- ── RUN ── -->
+<div class="panel">
+  <h2>Run</h2>
+  <button class="run" id="btnRun" onclick="runSuite()">▶ Run full suite — card resting, then walk away</button>
+  <div id="hero">
+    <div id="phaseName">IDLE</div>
+    <div id="phaseSub">press run with the card held against the phone</div>
+    <div id="bar"><div id="barFill"></div></div>
+    <div id="eta"></div>
+    <div class="stats">
+      <div class="stat ok"><div class="v" id="st_ok">0</div><div class="l">reads ok</div></div>
+      <div class="stat bad"><div class="v" id="st_fail">0</div><div class="l">fail</div></div>
+      <div class="stat info"><div class="v" id="st_streak">0</div><div class="l">streak</div></div>
+      <div class="stat"><div class="v" id="st_p50">–</div><div class="l">p50 ms</div></div>
+    </div>
+  </div>
+  <button class="danger" onclick="abortSuite()" id="btnStop" disabled>Stop</button>
+  <div class="note"><b>One physical rule:</b> the whole run assumes the card stays put and you don't touch anything. Under that rule, every successful read is provably hands-off — that's how the auto-read question gets answered without a human watching.</div>
+</div>
+
+<!-- ── CARD-ABSENT (optional 2nd run) ── -->
+<div class="panel">
+  <h2>Optional · card-absent probe</h2>
+  <button class="sec" id="btnAbsent" onclick="runAbsent()">Run card-absent probe — remove the card first</button>
+  <div class="note">Only this measures how fast iOS gives up when no card is there (drives your “replace the card” UX) and whether the limiter behaves differently with nothing to read. Appends to the same dump.</div>
+</div>
+
+<!-- ── VERDICTS ── -->
+<div class="panel" id="verdictPanel">
+  <h2>Verdicts (auto)</h2>
+  <div class="vk" id="verdicts"><div class="lbl">status</div><div class="val dim">no run yet</div></div>
+</div>
+
+<!-- ── MANUAL ── -->
+<div class="panel hidden" id="manualPanel">
+  <h2>Confirm the few visual things</h2>
+  <div class="note" style="margin-top:0">Everything else was captured programmatically. These four need eyes on the screen — pre-filled with my best inference; tap to override, or leave as “didn’t watch.”</div>
+
+  <div class="manualq">
+    <div class="q">Did iOS show its system sheet on each read?</div>
+    <div class="inf" id="inf_sheet">inference: —</div>
+    <div class="seg" data-key="sheetAppeared">
+      <button onclick="setManual('sheetAppeared','yes',this)">Yes, every time</button>
+      <button onclick="setManual('sheetAppeared','some',this)">Only sometimes</button>
+      <button onclick="setManual('sheetAppeared','no',this)">Never</button>
+      <button onclick="setManual('sheetAppeared','na',this)">Didn’t watch</button>
+    </div>
+  </div>
+
+  <div class="manualq">
+    <div class="q">On abort/timeout, did the sheet dismiss itself (no manual tap)?</div>
+    <div class="inf">inference: cannot be inferred — genuinely needs your eyes</div>
+    <div class="seg" data-key="sheetAutoDismiss">
+      <button onclick="setManual('sheetAutoDismiss','yes',this)">Dismissed itself</button>
+      <button onclick="setManual('sheetAutoDismiss','no',this)">I had to dismiss it</button>
+      <button onclick="setManual('sheetAutoDismiss','na',this)">Didn’t watch</button>
+    </div>
+  </div>
+
+  <div class="manualq">
+    <div class="q">Did a PIN / passcode screen ever appear?</div>
+    <div class="inf" id="inf_pin">inference: —</div>
+    <div class="seg" data-key="pinSeen">
+      <button onclick="setManual('pinSeen','yes',this)">Yes</button>
+      <button onclick="setManual('pinSeen','no',this)">No</button>
+      <button onclick="setManual('pinSeen','na',this)">Didn’t watch</button>
+    </div>
+  </div>
+
+  <div class="manualq">
+    <div class="q">Did you ever have to lift and re-tap the card to get a read?</div>
+    <div class="inf">inference: if reads succeeded hands-off, this is “no” for those</div>
+    <div class="seg" data-key="reTap">
+      <button onclick="setManual('reTap','yes',this)">Yes, at least once</button>
+      <button onclick="setManual('reTap','no',this)">No, stayed put</button>
+      <button onclick="setManual('reTap','na',this)">Didn’t watch</button>
+    </div>
+  </div>
+
+  <label style="margin-top:12px">Anything else worth noting</label>
+  <input type="text" id="manualExtra" placeholder="free text" oninput="buildDump()">
+</div>
+
+<!-- ── DUMP ── -->
+<div class="panel hidden" id="dumpPanel">
+  <h2>Paste this back to me</h2>
+  <textarea id="dump" readonly onclick="this.select()"></textarea>
+  <div class="row" style="margin-top:8px">
+    <button class="sec" onclick="copyDump()">Copy dump</button>
+    <button onclick="downloadDump()">Download .json</button>
+  </div>
+  <div class="note">Tap the box to select-all, or use Copy. It regenerates with your manual answers each time you copy.</div>
+</div>
+
+<!-- ── LOG ── -->
+<div class="panel">
+  <h2>Live log <span id="logcount" style="color:var(--info)">0</span></h2>
+  <div id="log"></div>
+  <button class="danger" style="margin-top:8px" onclick="clearAll()">Clear everything</button>
+</div>
+
+<script>
+/* ═══════════ helpers ═══════════ */
+const $ = id => document.getElementById(id);
+const b64u = {
+  enc: b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''),
+  dec: s => { s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4)s+='='; return Uint8Array.from(atob(s),c=>c.charCodeAt(0)).buffer; }
+};
+const rnd = n => crypto.getRandomValues(new Uint8Array(n));
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const nowHH = () => new Date().toISOString().slice(11,23);
+const round = x => Math.round(x);
+const pct = (arr,p)=>{ if(!arr.length) return null; const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1, Math.floor(p/100*s.length))]; };
+
+const mem={};
+const store={
+  get(k){ try{return localStorage.getItem(k)??mem[k]??null;}catch(e){return mem[k]??null;} },
+  set(k,v){ try{localStorage.setItem(k,v);}catch(e){} mem[k]=v; },
+  del(k){ try{localStorage.removeItem(k);}catch(e){} delete mem[k]; }
+};
+
+/* ═══════════ state ═══════════ */
+let RESULTS = null;
+let running = false;
+let seq = 0;
+let suiteAbort = false;       // cooperative stop flag
+let activeAC = null;          // current AbortController
+const attempts = [];          // every get()/create() row
+const LOG = [];
+const manual = { sheetAppeared:null, sheetAutoDismiss:null, pinSeen:null, reTap:null };
+
+function log(cls,msg,data){
+  const e={t:new Date().toISOString(),cls,msg,data:data??null}; LOG.push(e);
+  const el=$('log'); const d=document.createElement('div'); d.className='lg-'+cls;
+  d.textContent=`${nowHH()} ${msg}`+(data?'  '+JSON.stringify(data):''); el.appendChild(d);
+  el.scrollTop=el.scrollHeight; $('logcount').textContent=LOG.length;
+}
+function clearAll(){ LOG.length=0; attempts.length=0; RESULTS=null; seq=0;
+  $('log').innerHTML=''; $('logcount').textContent='0';
+  $('verdicts').innerHTML='<div class="lbl">status</div><div class="val dim">no run yet</div>';
+  $('manualPanel').classList.add('hidden'); $('dumpPanel').classList.add('hidden');
+  setPhase('IDLE','cleared'); setBar(0); setStats();
+  log('warn','cleared');
+}
+
+/* ═══════════ UI paint ═══════════ */
+function setPhase(name,sub){ $('phaseName').textContent=name; if(sub!==undefined)$('phaseSub').textContent=sub; }
+function setBar(f){ $('barFill').style.width=Math.max(0,Math.min(100,f))+'%'; }
+function setEta(s){ $('eta').textContent=s||''; }
+const live={ok:0,fail:0,streak:0,best:0,durs:[]};
+function setStats(){
+  $('st_ok').textContent=live.ok; $('st_fail').textContent=live.fail;
+  $('st_streak').textContent=live.streak; $('st_p50').textContent=live.durs.length?pct(live.durs,50):'–';
+}
+
+/* ═══════════ environment ═══════════ */
+function envInfo(){ return {ua:navigator.userAgent, host:location.hostname, secure:window.isSecureContext, href:location.href.split('?')[0]}; }
+async function captureEnv(){
+  const e=envInfo(); let caps={},uvpaa=null,cma=null;
+  try{ if(PublicKeyCredential.getClientCapabilities) caps=await PublicKeyCredential.getClientCapabilities(); }catch(x){ caps={error:x.name}; }
+  try{ uvpaa=await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }catch(x){}
+  try{ if(PublicKeyCredential.isConditionalMediationAvailable) cma=await PublicKeyCredential.isConditionalMediationAvailable(); }catch(x){}
+  $('env').textContent=`${e.host} · secure:${e.secure} · ${e.ua}\nisUVPAA:${uvpaa} · conditionalGet:${cma} · caps:${JSON.stringify(caps)}`;
+  return {isUVPAA:uvpaa, conditionalGet:cma, caps, ...e};
+}
+
+/* ═══════════ authData ═══════════ */
+function parseAuthData(buf){
+  if(!buf) return {};
+  const b=new Uint8Array(buf); if(b.length<37) return {short:true};
+  const f=b[32]; const counter=(b[33]<<24|b[34]<<16|b[35]<<8|b[36])>>>0;
+  return {counter, up:!!(f&1), uv:!!(f&4), be:!!(f&8), bs:!!(f&16), at:!!(f&64), ed:!!(f&128)};
+}
+
+/* ═══════════ option builders ═══════════ */
+function getOptions(overrides={}){
+  const o={ challenge:rnd(32), rpId:location.hostname,
+            userVerification:$('cfgUV').value, timeout:(parseInt($('cfgCap').value,10)||12)*1000 };
+  const credId=store.get('credId');
+  if(credId) o.allowCredentials=[{type:'public-key', id:b64u.dec(credId), transports:['nfc']}];
+  else o.allowCredentials=[];
+  o.hints=['security-key'];
+  return Object.assign(o, overrides);
+}
+
+/* ═══════════ single attempt (get) ═══════════ */
+async function getAttempt(tag, overrides={}, capMs=null){
+  const ac=new AbortController(); activeAC=ac;
+  const atimer = capMs ? setTimeout(()=>ac.abort('lab-cap'), capMs) : null;
+  const row={n:++seq, t:new Date().toISOString(), tag, visible:document.visibilityState, uvReq:$('cfgUV').value};
+  const t0=performance.now();
+  try{
+    const cred=await navigator.credentials.get({publicKey:getOptions(overrides), signal:ac.signal});
+    row.ms=round(performance.now()-t0); row.ok=true;
+    const ad=parseAuthData(cred.response.authenticatorData);
+    Object.assign(row,{counter:ad.counter,up:ad.up,uv:ad.uv,be:ad.be,bs:ad.bs,attach:cred.authenticatorAttachment});
+    const key='lastCtr/'+cred.id; const prev=parseInt(store.get(key)??'-1',10);
+    if(prev>=0){ row.counterDelta = ad.counter - prev;
+      if(ad.counter<=prev && !(prev===0&&ad.counter===0)){ row.counterAnomaly=true; log('bad',`counter not increasing (prev ${prev} → ${ad.counter})`); } }
+    store.set(key,String(ad.counter));
+    log('ok',`✔ ${tag} #${row.n} ${row.ms}ms ctr=${ad.counter}${row.counterDelta!=null?`(+${row.counterDelta})`:''} up=${+ad.up} uv=${+ad.uv}`);
+  }catch(err){
+    row.ms=round(performance.now()-t0); row.ok=false; row.errName=err.name; row.errMsg=String(err.message||err).slice(0,160);
+    row.instantReject = (err.name==='NotAllowedError' && row.ms<400);
+    let hint = err.name==='AbortError' ? ' [aborted/cap]'
+             : row.instantReject ? ' [INSTANT-REJECT]'
+             : ''; 
+    log('bad',`✘ ${tag} #${row.n} ${row.ms}ms ${err.name}${hint}`);
+  }finally{ if(atimer)clearTimeout(atimer); if(activeAC===ac)activeAC=null; attempts.push(row); }
+  return row;
+}
+
+/* ═══════════ enroll ═══════════ */
+async function enroll(){
+  const pub={ challenge:rnd(32),
+    rp:{id:location.hostname, name:'WebAuthn NFC Lab'},
+    user:{id:rnd(16), name:'lab-'+Date.now().toString(36), displayName:'NFC Lab'},
+    pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],
+    authenticatorSelection:{residentKey:$('cfgRK').value, userVerification:$('cfgUV').value},
+    attestation:'none', timeout:60000, hints:['security-key'] };
+  const t0=performance.now(); const r={t:new Date().toISOString()};
+  try{
+    const cred=await navigator.credentials.create({publicKey:pub});
+    r.ms=round(performance.now()-t0); r.ok=true; store.set('credId',cred.id); store.del('lastCtr/'+cred.id);
+    try{ r.transports=cred.response.getTransports(); }catch(e){}
+    try{ r.alg=cred.response.getPublicKeyAlgorithm(); }catch(e){}
+    r.attach=cred.authenticatorAttachment; r.credIdPrefix=cred.id.slice(0,20);
+    const ad=parseAuthData(cred.response.getAuthenticatorData?cred.response.getAuthenticatorData():null);
+    r.uvFlag=ad.uv; r.beFlag=ad.be; r.bsFlag=ad.bs;
+    log('ok',`✔ enroll ${r.ms}ms attach=${r.attach} transports=${JSON.stringify(r.transports)} alg=${r.alg} uv=${+ad.uv} be=${+ad.be}`);
+  }catch(err){
+    r.ms=round(performance.now()-t0); r.ok=false; r.errName=err.name; r.errMsg=String(err.message||err).slice(0,160);
+    r.instantReject=(err.name==='NotAllowedError'&&r.ms<400);
+    log('bad',`✘ enroll ${r.ms}ms ${err.name}: ${r.errMsg}`);
+  }
+  return r;
+}
+
+/* ═══════════ inter-phase gap with countdown ═══════════ */
+async function gap(sec, why){
+  for(let i=sec;i>0 && !suiteAbort;i--){ setPhase('WAITING', `${why} · ${i}s`); await sleep(1000); }
+}
+
+/* ═══════════ THE SUITE ═══════════ */
+function estTotalSec(){
+  const c=parseInt($('cfgCycles').value,10)||20, iv=parseInt($('cfgInterval').value,10)||15,
+        rf=parseInt($('cfgRapid').value,10)||15;
+  return 8 /*post-enroll gap*/ + 3 /*gesture-free*/ + c*iv + 8 /*cooldown*/ + rf*2 + 5 + 6 /*overlap+abort*/;
+}
+async function runSuite(){
+  if(running) return;
+  if(!window.PublicKeyCredential){ log('bad','WebAuthn unavailable here — host over HTTPS and open in Safari directly.'); return; }
+  running=true; suiteAbort=false; $('btnRun').disabled=true; $('btnAbsent').disabled=true; $('btnStop').disabled=false;
+  attempts.length=0; seq=0; live.ok=live.fail=live.streak=live.best=0; live.durs=[]; setStats();
+  $('manualPanel').classList.add('hidden'); $('dumpPanel').classList.add('hidden');
+
+  const totalSec=estTotalSec(); const startedAt=Date.now();
+  const tick=setInterval(()=>{ const el=Math.round((Date.now()-startedAt)/1000);
+    setEta(`elapsed ${el}s / ~${totalSec}s`); setBar(el/totalSec*100); },500);
+
+  RESULTS={ schema:'webauthn-nfc-lab/v2', startedAt:new Date(startedAt).toISOString(),
+    setup:{note:$('setupNote').value||null},
+    config:{cycles:parseInt($('cfgCycles').value,10)||20, intervalS:parseInt($('cfgInterval').value,10)||15,
+            capS:parseInt($('cfgCap').value,10)||12, rapidMax:parseInt($('cfgRapid').value,10)||15,
+            userVerification:$('cfgUV').value, residentKey:$('cfgRK').value},
+    env:null, enroll:null, phases:{}, verdicts:{}, manual, attempts, log:LOG };
+
+  try{
+    log('info','═══ SUITE START ═══ keep the card on the phone, hands off');
+    RESULTS.env = await captureEnv();
+
+    /* Phase 1 — enroll (button tap is the gesture that covers this create) */
+    setPhase('ENROLL','creating test credential — resting card should read itself');
+    RESULTS.enroll = await enroll();
+    renderVerdicts();
+    if(suiteAbort) throw 'stopped';
+
+    /* Phase 2 — gesture-free single get (past the activation window) */
+    await gap(8,'letting the tap-gesture expire (tests gesture-free)');
+    if(suiteAbort) throw 'stopped';
+    setPhase('GESTURE-FREE','one get() with no fresh interaction');
+    const gf = await getAttempt('gesture-free', {}, (RESULTS.config.capS)*1000);
+    RESULTS.phases.gestureFree = gf;
+    renderVerdicts();
+
+    /* Phase 3 — soak */
+    const {cycles,intervalS,capS}=RESULTS.config;
+    const capMs=Math.max(3000, Math.min(capS*1000, intervalS*1000-2000));
+    const soakRows=[];
+    for(let i=1;i<=cycles && !suiteAbort;i++){
+      setPhase('SOAK',`cycle ${i}/${cycles}`);
+      const t0=performance.now();
+      const r=await getAttempt('soak', {}, capMs); soakRows.push(r);
+      if(r.ok){ live.ok++; live.streak++; live.best=Math.max(live.best,live.streak); live.durs.push(r.ms); }
+      else { live.fail++; live.streak=0; }
+      setStats();
+      const wait=intervalS*1000-(performance.now()-t0);
+      if(wait>0 && !suiteAbort){ for(let w=Math.round(wait/1000);w>0&&!suiteAbort;w--){ setPhase('SOAK',`cycle ${i}/${cycles} · next in ${w}s`); await sleep(1000);} if(wait%1000&&!suiteAbort)await sleep(wait%1000); }
+    }
+    const durs=soakRows.filter(r=>r.ok).map(r=>r.ms);
+    const monotonic = !soakRows.some(r=>r.counterAnomaly);
+    RESULTS.phases.soak={ rows:soakRows,
+      summary:{ total:soakRows.length, ok:soakRows.filter(r=>r.ok).length, fail:soakRows.filter(r=>!r.ok).length,
+        bestStreak:live.best, p50:pct(durs,50), p95:pct(durs,95), min:durs.length?Math.min(...durs):null, max:durs.length?Math.max(...durs):null,
+        counterMonotonic:monotonic, errorNames:[...new Set(soakRows.filter(r=>!r.ok).map(r=>r.errName))],
+        visibilityChanged: soakRows.some(r=>r.visible!=='visible') } };
+    renderVerdicts();
+    if(suiteAbort) throw 'stopped';
+
+    /* Phase 4 — rapid-fire limiter probe */
+    await gap(6,'cooldown before limiter probe');
+    if(suiteAbort) throw 'stopped';
+    const rapidMax=RESULTS.config.rapidMax; const rapidRows=[]; let instantAt=null;
+    for(let i=1;i<=rapidMax && !suiteAbort;i++){
+      setPhase('LIMITER',`rapid ${i}/${rapidMax}`);
+      const r=await getAttempt('rapid#'+i, {}, capMs*1000?capMs:12000); rapidRows.push(r);
+      if(r.instantReject){ instantAt=i; log('warn',`instant-reject at rapid #${i} → limiter/policy threshold`); break; }
+      if(r.errName==='AbortError') break;
+    }
+    RESULTS.phases.rapid={ rows:rapidRows, instantRejectAt:instantAt,
+      okCount:rapidRows.filter(r=>r.ok).length };
+    renderVerdicts();
+
+    /* Phase 5 — overlap */
+    if(!suiteAbort){
+      setPhase('OVERLAP','2nd call fired 400ms into the 1st');
+      const a=getAttempt('overlap-A', {}, capMs); await sleep(400); const b=getAttempt('overlap-B', {}, capMs);
+      const [ra,rb]=await Promise.all([a,b]);
+      RESULTS.phases.overlap={ A:{ok:ra.ok,ms:ra.ms,err:ra.errName}, B:{ok:rb.ok,ms:rb.ms,err:rb.errName},
+        note: ra.ok&&!rb.ok ? 'A survived, B rejected' : rb.ok&&!ra.ok ? 'B survived, A rejected'
+             : ra.ok&&rb.ok ? 'both succeeded (queued)' : 'both failed' };
+      log('info','overlap: '+RESULTS.phases.overlap.note);
+    }
+
+    /* Phase 6 — abort behavior */
+    if(!suiteAbort){
+      setPhase('ABORT','get() then auto-abort at 3s');
+      const ac=new AbortController(); const t0=performance.now(); const r={tag:'abort-probe',t:new Date().toISOString()};
+      setTimeout(()=>ac.abort('lab-abort-test'),3000);
+      try{ await navigator.credentials.get({publicKey:getOptions(), signal:ac.signal}); r.ok=true; r.ms=round(performance.now()-t0); }
+      catch(e){ r.ok=false; r.ms=round(performance.now()-t0); r.errName=e.name; }
+      RESULTS.phases.abort=r; attempts.push(r);
+      log('info',`abort probe → ${r.errName||'resolved'} at ${r.ms}ms (sheet-dismissal is a manual check)`);
+    }
+
+    /* Phase 7 — recovery, only if limiter fired anywhere */
+    const limiterFired = instantAt!=null || attempts.some(r=>r.instantReject);
+    if(limiterFired && !suiteAbort){
+      await gap(60,'limiter fired — waiting to test recovery');
+      if(!suiteAbort){ setPhase('RECOVERY','one get() after 60s'); const r=await getAttempt('recovery',{},capMs);
+        RESULTS.phases.recovery={ waitedS:60, ok:r.ok, ms:r.ms, err:r.errName }; }
+    }
+
+    log('info','═══ SUITE COMPLETE ═══');
+    setPhase('DONE','review verdicts, confirm the 4 visual items, paste the dump');
+    setBar(100);
+  }catch(e){
+    if(e==='stopped') { log('warn','suite stopped by user'); setPhase('STOPPED','partial results kept'); }
+    else { log('bad','suite error: '+(e&&e.message||e)); setPhase('ERROR',String(e&&e.message||e)); }
+  }finally{
+    clearInterval(tick); running=false; $('btnRun').disabled=false; $('btnAbsent').disabled=false; $('btnStop').disabled=true;
+    RESULTS.finishedAt=new Date().toISOString();
+    computeVerdicts(); renderVerdicts(); showInferences();
+    $('manualPanel').classList.remove('hidden'); $('dumpPanel').classList.remove('hidden');
+    buildDump();
+  }
+}
+
+function abortSuite(){ suiteAbort=true; if(activeAC) activeAC.abort('lab-stop'); log('warn','stop requested'); }
+
+/* ═══════════ card-absent probe ═══════════ */
+async function runAbsent(){
+  if(running) return;
+  running=true; $('btnRun').disabled=true; $('btnAbsent').disabled=true; $('btnStop').disabled=false; suiteAbort=false;
+  if(!RESULTS){ RESULTS={ schema:'webauthn-nfc-lab/v2', startedAt:new Date().toISOString(), setup:{note:$('setupNote').value||null},
+    config:{userVerification:$('cfgUV').value}, env:await captureEnv(), phases:{}, verdicts:{}, manual, attempts, log:LOG }; }
+  try{
+    log('info','═══ CARD-ABSENT PROBE ═══ make sure NO card is near the phone');
+    const capMs=(parseInt($('cfgCap').value,10)||12)*1000;
+    const rows=[];
+    for(let i=1;i<=3 && !suiteAbort;i++){
+      setPhase('ABSENT',`timeout-honor ${i}/3 (no card)`);
+      const r=await getAttempt('absent-timeout#'+i, {}, capMs); rows.push(r);
+      await gap(3,'between absent probes');
+    }
+    // rapid without card
+    const rapid=[]; let instantAt=null;
+    for(let i=1;i<=8 && !suiteAbort;i++){
+      setPhase('ABSENT',`rapid-no-card ${i}/8`);
+      const r=await getAttempt('absent-rapid#'+i, {}, capMs); rapid.push(r);
+      if(r.instantReject){ instantAt=i; break; }
+    }
+    RESULTS.phases.cardAbsent={ timeoutProbes:rows, rapidNoCard:rapid, instantRejectAt:instantAt,
+      configuredCapMs:capMs,
+      medianRejectMs: pct(rows.filter(r=>!r.ok).map(r=>r.ms),50),
+      note:'compare medianRejectMs against configuredCapMs to see if iOS honors your timeout or clamps it' };
+    log('info','═══ CARD-ABSENT DONE ═══');
+    setPhase('DONE','card-absent data appended to dump');
+  }catch(e){ log('bad','absent probe error: '+(e&&e.message||e)); }
+  finally{ running=false; $('btnRun').disabled=false; $('btnAbsent').disabled=false; $('btnStop').disabled=true;
+    RESULTS.finishedAt=new Date().toISOString(); computeVerdicts(); renderVerdicts(); $('dumpPanel').classList.remove('hidden'); buildDump(); }
+}
+
+/* ═══════════ verdicts ═══════════ */
+function computeVerdicts(){
+  if(!RESULTS) return; const v={};
+  // gesture-free
+  const gf=RESULTS.phases.gestureFree;
+  if(gf) v.gestureFree = gf.ok ? 'WORKS (no gesture needed)'
+        : gf.instantReject ? 'BLOCKED — gesture still required (older iOS?) or limiter'
+        : `inconclusive (${gf.errName||'?'})`;
+  // hands-off auto-read
+  const s=RESULTS.phases.soak&&RESULTS.phases.soak.summary;
+  if(s) v.handsOffAutoRead = `${s.ok}/${s.total} reads succeeded hands-off`
+        + (s.fail? ` (${s.fail} failed: ${s.errorNames.join(',')||'—'})`:'');
+  if(s) v.readLatency = s.p50!=null? `p50 ${s.p50}ms · p95 ${s.p95}ms · range ${s.min}–${s.max}ms` : 'no successful reads';
+  if(s) v.counterMonotonic = s.counterMonotonic ? 'yes (no clone/replay signal)' : 'NO — counter anomaly seen';
+  if(s&&s.visibilityChanged) v.warning='page was backgrounded mid-soak — some failures may be that, not iOS';
+  // limiter
+  const rp=RESULTS.phases.rapid;
+  if(rp) v.rateLimiter = rp.instantRejectAt!=null
+        ? `instant-reject at rapid call #${rp.instantRejectAt} — polling faster than this will be throttled`
+        : `no instant-reject in ${rp.rows.length} back-to-back calls — cadence looks safe`;
+  const rec=RESULTS.phases.recovery;
+  if(rec) v.limiterRecovery = rec.ok? `recovered after ${rec.waitedS}s` : `still blocked after ${rec.waitedS}s (${rec.err})`;
+  // uv-required incompatibility
+  if(RESULTS.config.userVerification==='required' && s) v.uvRequiredHandsOff =
+     s.ok>0 ? 'UV=required still read hands-off (platform did UV without a prompt?)' : 'UV=required could not read hands-off (expected — PIN needs interaction)';
+  // overlap
+  if(RESULTS.phases.overlap) v.overlap=RESULTS.phases.overlap.note;
+  // abort
+  if(RESULTS.phases.abort) v.abortReturns=`${RESULTS.phases.abort.errName||'resolved'} @ ${RESULTS.phases.abort.ms}ms`;
+  // card-absent
+  const ca=RESULTS.phases.cardAbsent;
+  if(ca) v.timeoutHonor = ca.medianRejectMs!=null
+        ? `iOS gave up at ~${ca.medianRejectMs}ms vs your ${ca.configuredCapMs}ms cap` : 'no rejects recorded';
+  RESULTS.verdicts=v;
+}
+function renderVerdicts(){
+  computeVerdicts();
+  const v=RESULTS&&RESULTS.verdicts||{};
+  const order=['gestureFree','handsOffAutoRead','readLatency','counterMonotonic','rateLimiter','limiterRecovery','uvRequiredHandsOff','overlap','abortReturns','timeoutHonor','warning'];
+  const cls=k=>{ const s=(v[k]||'').toLowerCase();
+    if(k==='warning') return 'warn';
+    if(/no clone|works|safe|recovered|yes \(/.test(s)) return 'ok';
+    if(/blocked|no —|throttl|could not|anomaly|still blocked/.test(s)) return 'bad';
+    return 'dim'; };
+  let html='';
+  const keys=order.filter(k=>v[k]!=null);
+  if(!keys.length){ html='<div class="lbl">status</div><div class="val dim">running…</div>'; }
+  else for(const k of keys){ html+=`<div class="lbl">${k}</div><div class="val ${cls(k)}">${v[k]}</div>`; }
+  $('verdicts').innerHTML=html;
+}
+
+/* ═══════════ inferences for manual section ═══════════ */
+function showInferences(){
+  const s=RESULTS.phases.soak&&RESULTS.phases.soak.summary;
+  const sheetLikely = attempts.some(r=>r.ok || (r.ms&&r.ms>=300));
+  $('inf_sheet').textContent = 'inference: '+(sheetLikely
+    ? 'yes — reads took real time / succeeded, so a sheet almost certainly showed each time'
+    : 'unclear — everything rejected fast, a sheet may not have shown');
+  const anyUV = attempts.some(r=>r.uv);
+  $('inf_pin').textContent = 'inference: '+(RESULTS.config.userVerification!=='required' && !anyUV
+    ? 'no — UV flag never set under discouraged, so no PIN was collected'
+    : anyUV ? 'maybe — UV flag was set on at least one read' : 'unclear');
+}
+function setManual(key,val,btn){
+  manual[key]=val;
+  const seg=btn.parentElement; [...seg.children].forEach(b=>b.classList.remove('on')); btn.classList.add('on');
+  buildDump();
+}
+
+/* ═══════════ dump ═══════════ */
+function buildDump(){
+  if(!RESULTS){ $('dump').value=''; return; }
+  RESULTS.setup.note=$('setupNote').value||null;
+  RESULTS.manual={...manual, extra:$('manualExtra').value||null};
+  computeVerdicts();
+  const readme = {
+    what:'Automated iOS-Safari WebAuthn/NFC presence-polling test. Paste this whole object back.',
+    headline: RESULTS.verdicts
+  };
+  const out = { READ_ME:readme, ...RESULTS };
+  $('dump').value = JSON.stringify(out, null, 1);
+}
+async function copyDump(){
+  buildDump();
+  try{ await navigator.clipboard.writeText($('dump').value); log('ok','dump copied to clipboard'); }
+  catch(e){ $('dump').select(); log('warn','clipboard blocked — text selected, copy manually'); }
+}
+function downloadDump(){
+  buildDump();
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([$('dump').value],{type:'application/json'}));
+  a.download='webauthn-nfc-lab-'+Date.now()+'.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+}
+
+/* ═══════════ ambient ═══════════ */
+document.addEventListener('visibilitychange',()=>log('dim','visibility → '+document.visibilityState));
+window.addEventListener('load', async ()=>{
+  await captureEnv();
+  if(!window.PublicKeyCredential){ $('btnRun').disabled=true; log('bad','WebAuthn API not present — open this page over HTTPS directly in Safari, not in a preview frame.'); }
+  else log('info','ready — enter a setup note, hold the card on the phone, press Run');
+});
+</script>
+</body>
+</html>
