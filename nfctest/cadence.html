@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>WebAuthn NFC Cadence / Soak Runner</title>
+<style>
+  :root { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; color-scheme:light dark; }
+  body { max-width:900px; margin:auto; padding:20px 16px 80px; }
+  fieldset { border:1px solid #7776; border-radius:9px; margin:14px 0; padding:12px; }
+  label { display:block; margin:8px 0; }
+  input,select,button { font:inherit; padding:7px; }
+  input[type=text],input[type=number] { width:100%; max-width:480px; }
+  pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:500px; overflow:auto; border:1px solid #7776; padding:10px; border-radius:7px; }
+  .warning { color:#d99b00; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+</style>
+</head>
+<body>
+<h1>WebAuthn NFC Cadence / Soak Runner</h1>
+<p class="warning"><strong>This page can intentionally invoke the system security-key/NFC UI repeatedly.</strong> Nothing starts until you explicitly arm and press Start.</p>
+<p><a href="index.html">← main one-shot lab</a></p>
+
+<fieldset>
+<legend>Configuration</legend>
+<label>RP ID <input id="rpId" type="text"></label>
+<label>Number of attempts <input id="count" type="number" min="1" max="10000" value="10"></label>
+<label>Minimum gap after each completed/failed attempt (seconds) <input id="gap" type="number" min="0" step="1" value="30"></label>
+<label>Per-attempt abort timeout (seconds) <input id="timeout" type="number" min="1" value="15"></label>
+<label>User verification
+  <select id="uv"><option value="discouraged" selected>discouraged</option><option>preferred</option><option>required</option></select>
+</label>
+<label>Transport
+  <select id="transport"><option value="nfc" selected>nfc</option><option value="none">omit transports</option><option value="nfc-usb">nfc + usb</option></select>
+</label>
+<label><input id="hint" type="checkbox" checked> hints:["security-key"]</label>
+<label>Credential source
+  <select id="source">
+    <option value="saved" selected>saved credential from main lab</option>
+    <option value="custom">custom credential ID below</option>
+  </select>
+</label>
+<label>Custom credential ID (hex) <input id="custom" type="text" value="57414e46010000201130506f8eadcceb0a29486786a5c4e30221405f7e9dbcdb"></label>
+</fieldset>
+
+<fieldset>
+<legend>Arm / control</legend>
+<label><input id="arm" type="checkbox"> I understand this may open the NFC/security-key dialog repeatedly.</label>
+<div class="row">
+  <button id="start" disabled>Start cadence run</button>
+  <button id="stop" disabled>Stop / abort current attempt</button>
+  <button id="download">Download log</button>
+  <button id="clear">Clear log</button>
+</div>
+<p id="status">Idle.</p>
+</fieldset>
+
+<fieldset>
+<legend>Results</legend>
+<pre id="out"></pre>
+</fieldset>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const SAVED_KEY="webauthnNfcLabCredentialV1";
+let events=[], running=false, aborter=null;
+
+function now(){return new Date().toISOString();}
+function log(type,data={}){const e={ts:now(),perfMs:Math.round(performance.now()),type,...data};events.push(e);$("out").textContent=JSON.stringify(events,null,2);console.log("[CADENCE]",e);}
+function b64uToBytes(s){s=s.replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";const r=atob(s);return Uint8Array.from(r,c=>c.charCodeAt(0));}
+function hexToBytes(s){const c=s.replace(/[^0-9a-f]/gi,"");if(!c.length||c.length%2)throw new Error("Custom hex must be non-empty and even length.");const b=new Uint8Array(c.length/2);for(let i=0;i<b.length;i++)b[i]=parseInt(c.slice(i*2,i*2+2),16);return b;}
+function rand(n){return crypto.getRandomValues(new Uint8Array(n));}
+function saved(){try{return JSON.parse(localStorage.getItem(SAVED_KEY)||"null")}catch{return null}}
+function transports(){const v=$("transport").value;return v==="nfc"?["nfc"]:v==="nfc-usb"?["nfc","usb"]:null;}
+function credentialId(){
+  if($("source").value==="custom")return hexToBytes($("custom").value);
+  const s=saved(); if(!s)throw new Error("No saved credential. Register one on index.html first, or choose custom.");
+  return b64uToBytes(s.rawIdB64u);
+}
+function buildRequest(){
+  const d={type:"public-key",id:credentialId()}, t=transports(); if(t)d.transports=t;
+  const p={challenge:rand(32),rpId:$("rpId").value.trim(),allowCredentials:[d],userVerification:$("uv").value,timeout:Number($("timeout").value)*1000};
+  if($("hint").checked)p.hints=["security-key"];
+  return p;
+}
+function errObj(e){return{name:e?.name||"Error",message:String(e?.message||e)}}
+async function oneAttempt(i){
+  const publicKey=buildRequest(), timeoutMs=Number($("timeout").value)*1000;
+  aborter=new AbortController();
+  const timer=setTimeout(()=>aborter.abort("cadence timeout"),timeoutMs);
+  const start=performance.now();
+  log("attempt.start",{i,credentialIdLength:new Uint8Array(publicKey.allowCredentials[0].id).length,transport:publicKey.allowCredentials[0].transports||null});
+  try{
+    const c=await navigator.credentials.get({publicKey,signal:aborter.signal});
+    const elapsedMs=Math.round(performance.now()-start);
+    log("attempt.success",{i,elapsedMs,id:c.id,userHandleLength:c.response.userHandle?c.response.userHandle.byteLength:0,signatureLength:c.response.signature?.byteLength||0});
+  }catch(e){
+    log("attempt.error",{i,elapsedMs:Math.round(performance.now()-start),error:errObj(e)});
+  }finally{clearTimeout(timer);aborter=null;}
+}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+$("arm").addEventListener("change",()=>{$("start").disabled=!$("arm").checked||running;});
+$("start").addEventListener("click",async()=>{
+  if(!$("arm").checked||running)return;
+  running=true;$("start").disabled=true;$("stop").disabled=false;
+  const n=Number($("count").value),gapMs=Number($("gap").value)*1000;
+  log("run.start",{attempts:n,gapMs,timeoutMs:Number($("timeout").value)*1000});
+  for(let i=1;i<=n&&running;i++){
+    $("status").textContent=`Attempt ${i}/${n}…`;
+    await oneAttempt(i);
+    if(i<n&&running&&gapMs>0){
+      $("status").textContent=`Waiting ${gapMs/1000}s before next attempt…`;
+      const deadline=Date.now()+gapMs;
+      while(running&&Date.now()<deadline)await sleep(Math.min(500,deadline-Date.now()));
+    }
+  }
+  log("run.end",{stoppedEarly:!running});
+  running=false;$("stop").disabled=true;$("start").disabled=!$("arm").checked;
+  $("status").textContent="Run finished.";
+});
+$("stop").addEventListener("click",()=>{
+  running=false;
+  if(aborter)aborter.abort("user stopped cadence run");
+  $("status").textContent="Stopping…";
+});
+$("download").addEventListener("click",()=>{
+  const b=new Blob([JSON.stringify({exportedAt:now(),events},null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="webauthn-nfc-cadence-"+Date.now()+".json";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+});
+$("clear").addEventListener("click",()=>{events=[];$("out").textContent="";});
+$("rpId").value=location.hostname;
+if(!window.isSecureContext)$("status").textContent="WARNING: WebAuthn requires HTTPS / secure context.";
+</script>
+</body>
+</html>

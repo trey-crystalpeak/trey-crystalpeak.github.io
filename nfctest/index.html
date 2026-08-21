@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Safari ↔ NFC JavaCard WebAuthn Lab</title>
+<style>
+  :root {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    color-scheme: light dark;
+    --bg: #0b0d10;
+    --panel: #13171c;
+    --panel2: #0f1317;
+    --text: #e7edf3;
+    --muted: #95a0aa;
+    --border: #2c343c;
+    --good: #7bd88f;
+    --warn: #ffd166;
+    --bad: #ff7b72;
+    --accent: #79c0ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 80px; }
+  h1 { font-size: 1.35rem; margin: 0 0 6px; }
+  h2 { font-size: 1.05rem; margin: 0; }
+  h3 { font-size: .95rem; margin: 14px 0 8px; }
+  p, li, label, input, select, button, textarea { font-size: .9rem; line-height: 1.45; }
+  .muted { color: var(--muted); }
+  .warning { color: var(--warn); }
+  .good { color: var(--good); }
+  .bad { color: var(--bad); }
+  .card {
+    margin-top: 14px; padding: 14px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--panel);
+  }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+  label.stack { display:flex; flex-direction:column; gap:4px; }
+  input, select, textarea, button {
+    border:1px solid var(--border); border-radius:7px; background:var(--panel2); color:var(--text);
+    padding:8px;
+  }
+  textarea { width:100%; min-height:86px; resize:vertical; }
+  input[type=text], input[type=number] { width:100%; }
+  button { cursor:pointer; }
+  button.primary { border-color: var(--accent); }
+  button.danger { border-color: var(--bad); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  pre {
+    white-space: pre-wrap; overflow-wrap:anywhere; background:var(--panel2);
+    border:1px solid var(--border); border-radius:7px; padding:10px; max-height:430px; overflow:auto;
+    font-size:.79rem; line-height:1.4;
+  }
+  code { color: var(--accent); }
+  details { margin-top:10px; }
+  summary { cursor:pointer; }
+  .pill { display:inline-block; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:.75rem; }
+  .status { min-height:1.4em; margin-top:8px; }
+  .split { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+  @media (max-width:760px) { .split { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Safari ↔ NFC JavaCard WebAuthn Lab</h1>
+  <p class="muted">No active WebAuthn operation runs automatically. Every card-touching test below is a one-shot button press.</p>
+  <p id="secureWarning" class="warning"></p>
+
+  <section class="card">
+    <h2>0. Passive environment scan</h2>
+    <p class="muted">Safe to run repeatedly; it does not invoke the security-key/NFC UI.</p>
+    <div class="row">
+      <button id="runPassive">Refresh passive scan</button>
+      <span id="passiveSummary" class="pill"></span>
+    </div>
+    <pre id="passiveOut"></pre>
+  </section>
+
+  <section class="card">
+    <h2>Global test configuration</h2>
+    <div class="grid">
+      <label class="stack">RP ID
+        <input id="rpId" type="text">
+      </label>
+      <label class="stack">Timeout / abort (ms)
+        <input id="timeoutMs" type="number" min="1000" step="1000" value="15000">
+      </label>
+      <label class="stack">User verification
+        <select id="uv">
+          <option value="discouraged" selected>discouraged</option>
+          <option value="preferred">preferred</option>
+          <option value="required">required</option>
+        </select>
+      </label>
+      <label class="stack">Transport hint on allowCredentials
+        <select id="transportMode">
+          <option value="nfc" selected>nfc</option>
+          <option value="none">omit transports</option>
+          <option value="nfc-usb">nfc + usb</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label><input id="useHint" type="checkbox" checked> include <code>hints:["security-key"]</code></label>
+    </div>
+    <p class="muted">If Safari behaves strangely with <code>transports:["nfc"]</code>, repeat the same test with transports omitted. Safari has had allowCredentials/transport-hint regressions.</p>
+  </section>
+
+  <section class="card">
+    <h2>1. Known-good baseline: ordinary external-key WebAuthn</h2>
+    <p class="muted">Use this first with a stock NFC FIDO key or stock FIDO2Applet. Registration data is saved only in this origin's localStorage.</p>
+    <div class="row">
+      <button id="register" class="primary">Register external credential</button>
+      <button id="assertSaved">Assert saved credential once</button>
+      <button id="clearSaved" class="danger">Clear saved credential</button>
+    </div>
+    <div id="baselineStatus" class="status muted"></div>
+    <details>
+      <summary>Saved credential</summary>
+      <pre id="savedOut"></pre>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>2. Stationary-card re-acquisition test</h2>
+    <p>Run Step 1, then <strong>do not move the card</strong>. Manually press Step 2 whenever you are ready. There is no automatic second request.</p>
+    <div class="grid">
+      <label class="stack">Credential source
+        <select id="stationarySource">
+          <option value="saved" selected>saved registered credential</option>
+          <option value="tunnel">current tunnel payload as arbitrary credential ID</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button id="stationary1" class="primary">Step 1 — run first get()</button>
+      <button id="stationary2" disabled>Step 2 — run second get() without moving card</button>
+      <button id="resetStationary">Reset</button>
+    </div>
+    <div id="stationaryStatus" class="status muted"></div>
+    <pre id="stationaryOut"></pre>
+  </section>
+
+  <section class="card">
+    <h2>3. Private RPC / arbitrary credential-ID test</h2>
+    <p class="muted">This is the core experiment for the custom applet. The byte string below becomes <code>allowCredentials[0].id</code>. Inspect <code>userHandle</code>, <code>signature</code>, <code>rawId</code>, and authenticatorData in the result.</p>
+
+    <div class="grid">
+      <label class="stack">Input format
+        <select id="payloadFormat">
+          <option value="text" selected>UTF-8 text</option>
+          <option value="hex">hex</option>
+          <option value="b64u">base64url</option>
+        </select>
+      </label>
+      <label class="stack">Generate deterministic test pattern
+        <select id="patternSize">
+          <option>1</option><option>16</option><option>32</option><option selected>64</option>
+          <option>128</option><option>255</option><option>512</option><option>1023</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button id="fillPattern">Fill selected byte pattern</button>
+      <span id="payloadLen" class="pill">0 bytes</span>
+    </div>
+    <textarea id="payload">hello javacard</textarea>
+    <div class="row">
+      <button id="sendTunnel" class="primary">Send one tunnel get()</button>
+    </div>
+    <div id="tunnelStatus" class="status muted"></div>
+  </section>
+
+  <section class="card">
+    <h2>4. Manual payload-size sweep</h2>
+    <p class="muted">One operation per click. Select a size and run exactly one WebAuthn request; this section never sweeps automatically.</p>
+    <div class="grid">
+      <label class="stack">Credential-ID size
+        <select id="sizeSweep">
+          <option>1</option><option>16</option><option>32</option><option>64</option>
+          <option>128</option><option selected>255</option><option>512</option><option>1023</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <button id="runSize">Run one request at selected size</button>
+    </div>
+    <div id="sizeStatus" class="status muted"></div>
+  </section>
+
+  <section class="card">
+    <h2>5. Optional one-shot extension probes</h2>
+    <p class="muted">Secondary tests only. These require the saved registered credential and each invokes at most one WebAuthn operation.</p>
+    <div class="row">
+      <button id="testPrf">PRF assertion once</button>
+      <button id="testLargeBlob">largeBlob read once</button>
+    </div>
+    <div id="extensionStatus" class="status muted"></div>
+  </section>
+
+  <section class="card">
+    <h2>Last WebAuthn response</h2>
+    <p class="muted">Decoded into the fields relevant to the proposed tunnel.</p>
+    <pre id="responseOut">No active test has completed yet.</pre>
+  </section>
+
+  <section class="card">
+    <h2>Event log / export</h2>
+    <div class="row">
+      <button id="downloadLog">Download JSON log</button>
+      <button id="copyLog">Copy JSON log</button>
+      <button id="clearLog">Clear log</button>
+      <a href="cadence.html">Open separate cadence / soak runner</a>
+    </div>
+    <pre id="logOut"></pre>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+const $ = id => document.getElementById(id);
+const state = {
+  events: [],
+  lastResponse: null,
+  stationary: { step1Started: null, step1Completed: null, result1: null }
+};
+const SAVED_KEY = "webauthnNfcLabCredentialV1";
+
+function nowIso() { return new Date().toISOString(); }
+function bytesToHex(bytes) { return Array.from(bytes, b => b.toString(16).padStart(2,"0")).join(""); }
+function bytesToB64u(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function b64uToBytes(s) {
+  s = s.replace(/-/g,"+").replace(/_/g,"/");
+  while (s.length % 4) s += "=";
+  const raw = atob(s);
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+function hexToBytes(s) {
+  const clean = s.replace(/[^0-9a-f]/gi,"");
+  if (clean.length % 2) throw new Error("Hex input must contain an even number of hex digits.");
+  const out = new Uint8Array(clean.length / 2);
+  for (let i=0;i<out.length;i++) out[i] = parseInt(clean.slice(i*2,i*2+2),16);
+  return out;
+}
+function maybeUtf8(bytes) {
+  try {
+    const text = new TextDecoder("utf-8",{fatal:true}).decode(bytes);
+    const printable = [...text].filter(c => c >= " " && c !== "\u007f").length;
+    return text.length && printable / text.length > .8 ? text : null;
+  } catch { return null; }
+}
+function patternBytes(n) {
+  const out = new Uint8Array(n);
+  for (let i=0;i<n;i++) out[i] = (i * 31 + 17) & 0xff;
+  if (n >= 8) {
+    out[0]=0x57; out[1]=0x41; out[2]=0x4e; out[3]=0x46; // "WANF"
+    out[4]=0x01;
+    out[5]=(n>>>16)&0xff; out[6]=(n>>>8)&0xff; out[7]=n&0xff;
+  }
+  return out;
+}
+function randomBytes(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+
+function logEvent(type, data={}) {
+  const e = {ts: nowIso(), perfMs: Math.round(performance.now()), type, ...data};
+  state.events.push(e);
+  $("logOut").textContent = JSON.stringify(state.events, null, 2);
+  console.log("[NFC-LAB]", e);
+  return e;
+}
+function errorObject(err) {
+  return {
+    name: err?.name || "Error",
+    message: String(err?.message || err),
+    stack: err?.stack || null
+  };
+}
+function setStatus(id, text, cls="muted") {
+  const el = $(id);
+  el.className = "status " + cls;
+  el.textContent = text;
+}
+function transportList() {
+  switch ($("transportMode").value) {
+    case "nfc": return ["nfc"];
+    case "nfc-usb": return ["nfc","usb"];
+    default: return null;
+  }
+}
+function basePublicKeyRequest() {
+  const o = {
+    challenge: randomBytes(32),
+    rpId: $("rpId").value.trim(),
+    timeout: Number($("timeoutMs").value) || 15000,
+    userVerification: $("uv").value
+  };
+  if ($("useHint").checked) o.hints = ["security-key"];
+  return o;
+}
+function descriptor(idBytes) {
+  const d = {type:"public-key", id:idBytes};
+  const t = transportList();
+  if (t) d.transports = t;
+  return d;
+}
+function getPayloadBytes() {
+  const fmt = $("payloadFormat").value;
+  const s = $("payload").value;
+  if (fmt === "text") return new TextEncoder().encode(s);
+  if (fmt === "hex") return hexToBytes(s);
+  return b64uToBytes(s.trim());
+}
+function updatePayloadLen() {
+  try { $("payloadLen").textContent = getPayloadBytes().length + " bytes"; }
+  catch (e) { $("payloadLen").textContent = "invalid input"; }
+}
+function saveCredential(obj) {
+  localStorage.setItem(SAVED_KEY, JSON.stringify(obj));
+  renderSaved();
+}
+function loadCredential() {
+  try {
+    const raw = localStorage.getItem(SAVED_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function renderSaved() {
+  const s = loadCredential();
+  $("savedOut").textContent = s ? JSON.stringify(s,null,2) : "No saved credential.";
+}
+function parseAuthenticatorData(buffer) {
+  const b = new Uint8Array(buffer);
+  if (b.length < 37) return {length:b.length, error:"authenticatorData shorter than 37 bytes", hex:bytesToHex(b)};
+  const flags = b[32];
+  const count = ((b[33]<<24)>>>0) + (b[34]<<16) + (b[35]<<8) + b[36];
+  return {
+    length: b.length,
+    rpIdHashHex: bytesToHex(b.slice(0,32)),
+    flagsByte: flags,
+    flagsHex: "0x" + flags.toString(16).padStart(2,"0"),
+    flags: {
+      UP: !!(flags & 0x01), UV: !!(flags & 0x04), BE: !!(flags & 0x08),
+      BS: !!(flags & 0x10), AT: !!(flags & 0x40), ED: !!(flags & 0x80)
+    },
+    signCount: count >>> 0,
+    trailingHex: b.length > 37 ? bytesToHex(b.slice(37)) : ""
+  };
+}
+function parseClientData(buffer) {
+  const b = new Uint8Array(buffer);
+  const raw = new TextDecoder().decode(b);
+  let json = null;
+  try { json = JSON.parse(raw); } catch {}
+  return {raw, json, hex:bytesToHex(b)};
+}
+function bufInfo(value) {
+  if (value == null) return null;
+  const b = new Uint8Array(value);
+  return {
+    length: b.length,
+    hex: bytesToHex(b),
+    base64url: bytesToB64u(b),
+    utf8IfPrintable: maybeUtf8(b)
+  };
+}
+function inspectCredential(cred) {
+  const r = cred.response || {};
+  let transports = null;
+  try { transports = r.getTransports ? r.getTransports() : null; } catch {}
+  let clientExt = null;
+  try { clientExt = cred.getClientExtensionResults ? cred.getClientExtensionResults() : null; } catch {}
+  const out = {
+    id: cred.id,
+    type: cred.type,
+    authenticatorAttachment: cred.authenticatorAttachment ?? null,
+    rawId: bufInfo(cred.rawId),
+    clientExtensionResults: clientExt,
+    responseType: r.constructor?.name || null,
+    clientDataJSON: r.clientDataJSON ? parseClientData(r.clientDataJSON) : null,
+    authenticatorData: r.authenticatorData ? parseAuthenticatorData(r.authenticatorData) : null,
+    signature: r.signature ? bufInfo(r.signature) : null,
+    userHandle: r.userHandle ? bufInfo(r.userHandle) : null,
+    attestationObject: r.attestationObject ? bufInfo(r.attestationObject) : null,
+    transports
+  };
+  try {
+    if (r.getPublicKey) out.publicKey = bufInfo(r.getPublicKey());
+    if (r.getPublicKeyAlgorithm) out.publicKeyAlgorithm = r.getPublicKeyAlgorithm();
+  } catch {}
+  state.lastResponse = out;
+  $("responseOut").textContent = JSON.stringify(out,null,2);
+  return out;
+}
+
+async function runGet(publicKey, label) {
+  if (!window.PublicKeyCredential || !navigator.credentials) throw new Error("WebAuthn is unavailable.");
+  const abortMs = Number($("timeoutMs").value) || 15000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort("lab timeout"), abortMs);
+  const started = performance.now();
+  logEvent("get.start", {label, publicKeySummary:{
+    rpId:publicKey.rpId,
+    allowCredentialsCount:publicKey.allowCredentials?.length ?? null,
+    allowCredentialLengths:publicKey.allowCredentials?.map(x => new Uint8Array(x.id).length) ?? null,
+    transports:publicKey.allowCredentials?.map(x => x.transports || null) ?? null,
+    uv:publicKey.userVerification,
+    hints:publicKey.hints || null,
+    extensions:Object.keys(publicKey.extensions || {})
+  }});
+  try {
+    const cred = await navigator.credentials.get({publicKey, signal:controller.signal});
+    const elapsedMs = Math.round(performance.now()-started);
+    const inspected = inspectCredential(cred);
+    logEvent("get.success", {label, elapsedMs, response:inspected});
+    return {cred, inspected, elapsedMs};
+  } catch (err) {
+    const elapsedMs = Math.round(performance.now()-started);
+    logEvent("get.error", {label, elapsedMs, error:errorObject(err)});
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function passiveScan() {
+  const o = {
+    timestamp: nowIso(),
+    secureContext: window.isSecureContext,
+    origin: location.origin,
+    protocol: location.protocol,
+    hostname: location.hostname,
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    visibilityState: document.visibilityState,
+    webauthn: {
+      navigatorCredentials: !!navigator.credentials,
+      PublicKeyCredential: !!window.PublicKeyCredential,
+      getClientCapabilities: !!window.PublicKeyCredential?.getClientCapabilities,
+      isUVPAA: !!window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable,
+      isConditionalMediationAvailable: !!window.PublicKeyCredential?.isConditionalMediationAvailable,
+      parseCreationOptionsFromJSON: !!window.PublicKeyCredential?.parseCreationOptionsFromJSON,
+      parseRequestOptionsFromJSON: !!window.PublicKeyCredential?.parseRequestOptionsFromJSON
+    },
+    otherBrowserAPIs: {
+      WebNFC_NDEFReader: "NDEFReader" in window,
+      navigatorSmartCard: "smartCard" in navigator,
+      WebUSB: "usb" in navigator,
+      WebHID: "hid" in navigator,
+      WebSerial: "serial" in navigator,
+      PaymentRequest: "PaymentRequest" in window,
+      ApplePaySession: "ApplePaySession" in window
+    }
+  };
+  if (window.PublicKeyCredential?.getClientCapabilities) {
+    try { o.webauthn.clientCapabilities = await PublicKeyCredential.getClientCapabilities(); }
+    catch (e) { o.webauthn.clientCapabilitiesError = errorObject(e); }
+  }
+  if (window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable) {
+    try { o.webauthn.uvpaa = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(); }
+    catch (e) { o.webauthn.uvpaaError = errorObject(e); }
+  }
+  if (window.PublicKeyCredential?.isConditionalMediationAvailable) {
+    try { o.webauthn.conditionalMediationAvailable = await PublicKeyCredential.isConditionalMediationAvailable(); }
+    catch (e) { o.webauthn.conditionalMediationError = errorObject(e); }
+  }
+  $("passiveOut").textContent = JSON.stringify(o,null,2);
+  $("passiveSummary").textContent = o.secureContext && o.webauthn.PublicKeyCredential ? "WebAuthn environment OK" : "WebAuthn prerequisites missing";
+  logEvent("passive.scan", o);
+}
+
+async function registerExternal() {
+  setStatus("baselineStatus","Starting registration…");
+  const timeout = Number($("timeoutMs").value) || 15000;
+  const publicKey = {
+    challenge: randomBytes(32),
+    rp: {id:$("rpId").value.trim(), name:"NFC JavaCard Lab"},
+    user: {
+      id: randomBytes(32),
+      name:"nfc-lab-" + Date.now(),
+      displayName:"NFC Lab Test"
+    },
+    pubKeyCredParams:[{type:"public-key",alg:-7}],
+    timeout,
+    attestation:"none",
+    authenticatorSelection:{
+      authenticatorAttachment:"cross-platform",
+      residentKey:"discouraged",
+      requireResidentKey:false,
+      userVerification:$("uv").value
+    }
+  };
+  if ($("useHint").checked) publicKey.hints = ["security-key"];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort("lab timeout"), timeout);
+  const started = performance.now();
+  logEvent("create.start",{rpId:publicKey.rp.id});
+  try {
+    const cred = await navigator.credentials.create({publicKey, signal:controller.signal});
+    const elapsedMs = Math.round(performance.now()-started);
+    const inspected = inspectCredential(cred);
+    let transports = [];
+    try { transports = cred.response.getTransports ? cred.response.getTransports() : []; } catch {}
+    const saved = {
+      createdAt:nowIso(),
+      rpId:publicKey.rp.id,
+      id:cred.id,
+      rawIdB64u:bytesToB64u(new Uint8Array(cred.rawId)),
+      transports,
+      publicKeyB64u: cred.response.getPublicKey?.() ? bytesToB64u(new Uint8Array(cred.response.getPublicKey())) : null,
+      publicKeyAlgorithm: cred.response.getPublicKeyAlgorithm?.() ?? null
+    };
+    saveCredential(saved);
+    logEvent("create.success",{elapsedMs,saved,response:inspected});
+    setStatus("baselineStatus","Registration succeeded in " + elapsedMs + " ms.","good");
+  } catch (e) {
+    logEvent("create.error",{elapsedMs:Math.round(performance.now()-started),error:errorObject(e)});
+    setStatus("baselineStatus",`${e.name}: ${e.message}`,"bad");
+  } finally { clearTimeout(timer); }
+}
+function requestForSaved(extraExtensions=null) {
+  const s = loadCredential();
+  if (!s) throw new Error("No saved credential. Register one first.");
+  const p = basePublicKeyRequest();
+  p.rpId = $("rpId").value.trim() || s.rpId;
+  const d = {type:"public-key",id:b64uToBytes(s.rawIdB64u)};
+  const chosen = transportList();
+  if (chosen) d.transports = chosen;
+  p.allowCredentials = [d];
+  if (extraExtensions) p.extensions = extraExtensions;
+  return p;
+}
+function requestForTunnel(bytes) {
+  const p = basePublicKeyRequest();
+  p.allowCredentials = [descriptor(bytes)];
+  return p;
+}
+async function assertSaved(label="saved assertion") {
+  const p = requestForSaved();
+  return runGet(p,label);
+}
+async function sendTunnel(bytes=getPayloadBytes(), label="tunnel arbitrary credential ID") {
+  if (!bytes.length) throw new Error("Credential ID payload cannot be empty.");
+  const p = requestForTunnel(bytes);
+  return runGet(p,label);
+}
+
+$("runPassive").addEventListener("click", passiveScan);
+$("register").addEventListener("click", registerExternal);
+$("assertSaved").addEventListener("click", async () => {
+  setStatus("baselineStatus","Starting one assertion…");
+  try {
+    const r = await assertSaved();
+    setStatus("baselineStatus","Assertion succeeded in " + r.elapsedMs + " ms.","good");
+  } catch(e) { setStatus("baselineStatus",`${e.name}: ${e.message}`,"bad"); }
+});
+$("clearSaved").addEventListener("click", () => {
+  localStorage.removeItem(SAVED_KEY); renderSaved(); setStatus("baselineStatus","Saved credential cleared.");
+});
+
+$("stationary1").addEventListener("click", async () => {
+  $("stationary2").disabled = true;
+  state.stationary = {step1Started:performance.now(),step1Completed:null,result1:null};
+  setStatus("stationaryStatus","Step 1 running…");
+  try {
+    const r = $("stationarySource").value === "saved"
+      ? await assertSaved("stationary step 1")
+      : await sendTunnel(getPayloadBytes(),"stationary step 1 tunnel");
+    state.stationary.step1Completed = performance.now();
+    state.stationary.result1 = r;
+    $("stationary2").disabled = false;
+    setStatus("stationaryStatus","Step 1 succeeded. Do not move the card. Press Step 2 manually when ready.","good");
+    $("stationaryOut").textContent = JSON.stringify({
+      step1ElapsedMs:r.elapsedMs,
+      step1CompletedAt:nowIso(),
+      instruction:"Do not move card; Step 2 is never automatic."
+    },null,2);
+  } catch(e) {
+    setStatus("stationaryStatus",`Step 1 failed: ${e.name}: ${e.message}`,"bad");
+  }
+});
+$("stationary2").addEventListener("click", async () => {
+  const gapMs = state.stationary.step1Completed ? Math.round(performance.now()-state.stationary.step1Completed) : null;
+  setStatus("stationaryStatus","Step 2 running… card should still be stationary.");
+  try {
+    const r = $("stationarySource").value === "saved"
+      ? await assertSaved("stationary step 2")
+      : await sendTunnel(getPayloadBytes(),"stationary step 2 tunnel");
+    const result = {
+      gapAfterStep1Ms:gapMs,
+      step2ElapsedMs:r.elapsedMs,
+      step2CompletedAt:nowIso(),
+      conclusion:"Second get() completed; record whether the card was physically moved."
+    };
+    $("stationaryOut").textContent = JSON.stringify(result,null,2);
+    logEvent("stationary.pair.success",result);
+    setStatus("stationaryStatus","Step 2 succeeded. Record whether the card remained completely unmoved.","good");
+  } catch(e) {
+    const result = {gapAfterStep1Ms:gapMs,error:errorObject(e)};
+    $("stationaryOut").textContent = JSON.stringify(result,null,2);
+    logEvent("stationary.step2.error",result);
+    setStatus("stationaryStatus",`Step 2 failed: ${e.name}: ${e.message}`,"bad");
+  }
+});
+$("resetStationary").addEventListener("click", () => {
+  state.stationary={step1Started:null,step1Completed:null,result1:null};
+  $("stationary2").disabled=true;
+  $("stationaryOut").textContent="";
+  setStatus("stationaryStatus","Reset.");
+});
+
+$("payload").addEventListener("input",updatePayloadLen);
+$("payloadFormat").addEventListener("change",updatePayloadLen);
+$("fillPattern").addEventListener("click",() => {
+  const b = patternBytes(Number($("patternSize").value));
+  $("payloadFormat").value="hex";
+  $("payload").value=bytesToHex(b);
+  updatePayloadLen();
+});
+$("sendTunnel").addEventListener("click",async() => {
+  setStatus("tunnelStatus","Starting one arbitrary-ID assertion…");
+  try {
+    const b=getPayloadBytes();
+    const r=await sendTunnel(b);
+    setStatus("tunnelStatus",`Completed in ${r.elapsedMs} ms. Inspect response fields below.`,"good");
+  } catch(e) { setStatus("tunnelStatus",`${e.name}: ${e.message}`,"bad"); }
+});
+$("runSize").addEventListener("click",async() => {
+  const n=Number($("sizeSweep").value), b=patternBytes(n);
+  setStatus("sizeStatus",`Running one request with a ${n}-byte credential ID…`);
+  try {
+    const r=await sendTunnel(b,`size sweep ${n} bytes`);
+    setStatus("sizeStatus",`${n}-byte request completed in ${r.elapsedMs} ms.`,"good");
+  } catch(e) { setStatus("sizeStatus",`${n} bytes: ${e.name}: ${e.message}`,"bad"); }
+});
+
+$("testPrf").addEventListener("click",async() => {
+  setStatus("extensionStatus","Starting one PRF assertion…");
+  try {
+    const p=requestForSaved({prf:{eval:{first:randomBytes(32),second:randomBytes(32)}}});
+    const r=await runGet(p,"PRF one-shot");
+    setStatus("extensionStatus","PRF call completed; inspect clientExtensionResults.","good");
+  } catch(e) { setStatus("extensionStatus",`${e.name}: ${e.message}`,"bad"); }
+});
+$("testLargeBlob").addEventListener("click",async() => {
+  setStatus("extensionStatus","Starting one largeBlob read…");
+  try {
+    const p=requestForSaved({largeBlob:{read:true}});
+    await runGet(p,"largeBlob read one-shot");
+    setStatus("extensionStatus","largeBlob call completed; inspect clientExtensionResults.","good");
+  } catch(e) { setStatus("extensionStatus",`${e.name}: ${e.message}`,"bad"); }
+});
+
+$("downloadLog").addEventListener("click",() => {
+  const blob=new Blob([JSON.stringify({exportedAt:nowIso(),events:state.events,lastResponse:state.lastResponse},null,2)],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="webauthn-nfc-lab-"+Date.now()+".json";
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+});
+$("copyLog").addEventListener("click",async() => {
+  await navigator.clipboard.writeText(JSON.stringify({events:state.events,lastResponse:state.lastResponse},null,2));
+});
+$("clearLog").addEventListener("click",() => {state.events=[];$("logOut").textContent="";});
+
+function init() {
+  $("rpId").value=location.hostname;
+  if (!window.isSecureContext) {
+    $("secureWarning").textContent="WebAuthn requires a secure context. Serve this page over HTTPS (or a valid same-device localhost context); opening the HTML directly from Files will not be sufficient.";
+  }
+  renderSaved();
+  updatePayloadLen();
+  passiveScan(); // passive only; never opens WebAuthn UI
+}
+init();
+</script>
+</body>
+</html>
